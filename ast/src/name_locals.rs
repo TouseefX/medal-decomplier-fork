@@ -43,34 +43,31 @@ impl Namer {
     fn generate_meaningful_name(&self, value: &RValue) -> Option<String> {
         match value {
             RValue::Call(call) => {
-                // Get method name, handling UTF-8 conversion as per your fixes
+                // get names
                 if let Some(method_name) = call.get_method_name() {
+                    let suffix = self.naming_patterns.get(&method_name).map_or("".to_string(), |v| v.join(""));
+
                     if let Some(arg) = call.get_first_argument() {
-                        // Clean the argument (now properly handling UTF-8 strings)
-                        let clean_arg = arg.trim_matches(|c| c == '\'' || c == '"')
-                            .replace(" ", "");
-                        
-                        // Get suffix (if any)
-                        let suffix = self.naming_patterns
-                            .get(&method_name)
-                            .map_or("".to_string(), |v| v.join(""));
-                        
+                        // waitforchild name thing fix i think?
+                        let clean_arg = arg.trim_matches(|c| c == '\'' || c == '"').replace(" ", "");
                         if !clean_arg.is_empty() {
                             return Some(format!("{}{}", clean_arg, suffix));
                         }
                     }
                 }
             }
+
             RValue::Index(index) => {
-                // Try to generate name from index access
                 if let Some(key_name) = index.get_key_name() {
                     return Some(key_name);
                 }
             }
+
             _ => {}
         }
         None
     }
+
 
     fn name_local(&mut self, prefix: &str, local: &RcLocal, value: Option<&RValue>) {
         let mut lock = local.0.0.lock();
