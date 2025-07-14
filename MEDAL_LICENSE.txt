@@ -1,3 +1,7 @@
+-- THIS LICENSE IS NOT OWNED BY ME
+-- THIS IS DEFAULT LICENSE BY MEDAL DECOMPLIER TEAM
+-- I DO NOT CLAM THIS
+
 MIT License
 
 Copyright (c) 2024 Jujhar Singh, Mathias Pedersen
