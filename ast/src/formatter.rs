@@ -227,9 +227,25 @@ impl<'a, W: fmt::Write> Formatter<'a, W> {
             } else {
                 if !sequential_keys {
                     if let Some(key) = key {
-                        write!(self.output, "[")?;
-                        self.format_rvalue(key)?;
-                        write!(self.output, "] = ")?;
+                        // Custom: if key is a string literal and a valid Lua identifier, print as identifier (no quotes or brackets)
+                        if let RValue::Literal(Literal::String(bytes)) = key {
+                            let key_str = std::str::from_utf8(bytes).unwrap();
+                            let first_char = key_str.chars().next();
+                            // Only allow unquoted if valid name and does not start with a digit or special char
+                            if Self::is_valid_name(bytes)
+                                && first_char.map(|c| c.is_ascii_alphabetic() || c == '_').unwrap_or(false)
+                            {
+                                write!(self.output, "{} = ", key_str)?;
+                            } else {
+                                write!(self.output, "[\"")?;
+                                write!(self.output, "{}", Self::escape_string(bytes))?;
+                                write!(self.output, "\"] = ")?;
+                            }
+                        } else {
+                            write!(self.output, "[")?;
+                            self.format_rvalue(key)?;
+                            write!(self.output, "] = ")?;
+                        }
                     }
                 }
                 self.format_rvalue(value)?;
