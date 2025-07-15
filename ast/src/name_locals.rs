@@ -17,6 +17,7 @@ pub struct Namer {
     upvalues: FxHashSet<RcLocal>,
     naming_patterns: HashMap<String, Vec<String>>,
     context_stack: Vec<NamingContext>,
+    used_names: HashMap<String, usize>,
 }
 
 impl Namer {
@@ -37,56 +38,176 @@ impl Namer {
             upvalues: FxHashSet::default(),
             naming_patterns,
             context_stack: Vec::new(), // ✅ This is correct
+            used_names: HashMap::new(),
         }
     }
 
-    fn generate_meaningful_name(&self, value: &RValue) -> Option<String> {
-        match value {
-            RValue::Call(call) => {
-                // get names
-                if let Some(method_name) = call.get_method_name() {
-                    let suffix = self.naming_patterns.get(&method_name).map_or("".to_string(), |v| v.join(""));
+    fn unique_name(&mut self, base: &str) -> String {
+        let count = self.used_names.entry(base.to_string()).or_insert(0);
+        let name = if *count == 0 {
+            base.to_string()
+        } else {
+            format!("{}_{}", base, count)
+        };
+        *count += 1;
+        name
+    }
 
+    fn generate_meaningful_name(&self, value: &RValue) -> Option<String> {
+        // Handle chained MethodCall/Call for WaitForChild/FindFirstChild/GetService
+        let mut current = value;
+        let mut last_name: Option<String> = None;
+        loop {
+            match current {
+                RValue::Call(call) => {
+                    if let Some(method_name) = call.get_method_name() {
+                        if ["GetService", "WaitForChild", "FindFirstChild"].contains(&method_name.as_str()) {
+                            if let Some(arg) = call.get_first_argument() {
+                                let clean_arg = arg.trim_matches(|c| c == '\'' || c == '"').replace(" ", "");
+                                let suffix = self.naming_patterns.get(&method_name).map_or("".to_string(), |v| v.join(""));
+                                if !clean_arg.is_empty() {
+                                    last_name = Some(format!("{}{}", clean_arg, suffix));
+                                }
+                            }
+                        }
+                    }
+                    // For chaining, go deeper if the call's value is another call/methodcall
+                    current = call.value.as_ref();
+                }
+                RValue::MethodCall(method_call) => {
+                    let method_name = &method_call.method;
+                    if ["GetService", "WaitForChild", "FindFirstChild"].contains(&method_name.as_str()) {
+                        if let Some(arg) = method_call.arguments.get(0) {
+                            match arg {
+                                RValue::Literal(crate::Literal::String(s)) => {
+                                    if let Ok(arg_str) = String::from_utf8(s.clone()) {
+                                        let clean_arg = arg_str.trim_matches(|c| c == '\'' || c == '"').replace(" ", "");
+                                        let suffix = self.naming_patterns.get(method_name).map_or("".to_string(), |v| v.join(""));
+                                        if !clean_arg.is_empty() {
+                                            last_name = Some(format!("{}{}", clean_arg, suffix));
+                                        }
+                                    }
+                                }
+                                RValue::Local(local) => {
+                                    let base_name = match method_call.value.as_ref() {
+                                        RValue::Index(index) => index.get_key_name(),
+                                        RValue::Global(global) => String::from_utf8(global.0.clone()).ok(),
+                                        _ => None,
+                                    };
+                                    if let Some(base) = base_name {
+                                        let mut chars = base.chars();
+                                        let capitalized = match chars.next() {
+                                            Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                                            None => base,
+                                        };
+                                        last_name = Some(format!("Some{}", capitalized));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    // For chaining, go deeper if the method_call's value is another call/methodcall
+                    current = method_call.value.as_ref();
+                }
+                _ => break,
+            }
+        }
+        if last_name.is_some() {
+            return last_name;
+        }
+        // Handle require(...)
+        if let RValue::Call(call) = value {
+            if let Some(method_name) = call.get_method_name() {
+                if method_name == "require" {
+                    if let Some(arg) = call.arguments.get(0) {
+                        let mut current = arg;
+                        let mut last_key = None;
+                        while let RValue::Index(index) = current {
+                            if let Some(key) = index.get_key_name() {
+                                last_key = Some(key);
+                            }
+                            current = &index.left;
+                        }
+                        if let Some(key) = last_key {
+                            return Some(key);
+                        }
+                    }
+                }
+            }
+        }
+        // Handle GetService/WaitForChild/FindFirstChild
+        if let RValue::Call(call) = value {
+            if let Some(method_name) = call.get_method_name() {
+                if ["GetService", "WaitForChild", "FindFirstChild"].contains(&method_name.as_str()) {
                     if let Some(arg) = call.get_first_argument() {
-                        // waitforchild name thing fix i think?
                         let clean_arg = arg.trim_matches(|c| c == '\'' || c == '"').replace(" ", "");
+                        let suffix = self.naming_patterns.get(&method_name).map_or("".to_string(), |v| v.join(""));
                         if !clean_arg.is_empty() {
                             return Some(format!("{}{}", clean_arg, suffix));
                         }
                     }
                 }
             }
-
-            RValue::Index(index) => {
-                if let Some(key_name) = index.get_key_name() {
-                    return Some(key_name);
+        }
+        if let RValue::MethodCall(method_call) = value {
+            let method_name = &method_call.method;
+            // Handle GetService/WaitForChild/FindFirstChild for MethodCall
+            if ["GetService", "WaitForChild", "FindFirstChild"].contains(&method_name.as_str()) {
+                if let Some(arg) = method_call.arguments.get(0) {
+                    match arg {
+                        RValue::Literal(crate::Literal::String(s)) => {
+                            if let Ok(arg_str) = String::from_utf8(s.clone()) {
+                                let clean_arg = arg_str.trim_matches(|c| c == '\'' || c == '"').replace(" ", "");
+                                let suffix = self.naming_patterns.get(method_name).map_or("".to_string(), |v| v.join(""));
+                                if !clean_arg.is_empty() {
+                                    return Some(format!("{}{}", clean_arg, suffix));
+                                }
+                            }
+                        }
+                        RValue::Local(local) => {
+                            let base_name = match method_call.value.as_ref() {
+                                RValue::Index(index) => index.get_key_name(),
+                                RValue::Global(global) => String::from_utf8(global.0.clone()).ok(),
+                                _ => None,
+                            };
+                            if let Some(base) = base_name {
+                                let mut chars = base.chars();
+                                let capitalized = match chars.next() {
+                                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                                    None => base,
+                                };
+                                return Some(format!("Some{}", capitalized));
+                            }
+                        }
+                        _ => {}
+                    }
                 }
             }
-
-            _ => {}
+        }
+        if let RValue::Index(index) = value {
+            if let Some(key_name) = index.get_key_name() {
+                return Some(key_name);
+            }
         }
         None
     }
 
-
     fn name_local(&mut self, prefix: &str, local: &RcLocal, value: Option<&RValue>) {
         let mut lock = local.0.0.lock();
-        
         if self.rename || lock.0.is_none() {
             // Single reference locals get underscore
             if Arc::count(&local.0.0) == 1 {
                 lock.0 = Some("_".to_string());
                 return;
             }
-
             // Try meaningful name first
             if let Some(value) = value {
                 if let Some(meaningful_name) = self.generate_meaningful_name(value) {
-                    lock.0 = Some(meaningful_name);
+                    lock.0 = Some(self.unique_name(&meaningful_name));
                     return;
                 }
             }
-
             // Better fallback names
             let base_name = match prefix {
                 "param" => "arg",
@@ -94,16 +215,7 @@ impl Namer {
                 "index" => "i",
                 _ => "var"
             };
-
-            // Generate numbered name
-            let number = if self.counter == 1 { 
-                "".to_string() 
-            } else { 
-                self.counter.to_string() 
-            };
-            
-            lock.0 = Some(format!("{}_{}", base_name, number));
-            self.counter += 1;
+            lock.0 = Some(self.unique_name(base_name));
         }
     }
 
