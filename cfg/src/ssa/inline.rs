@@ -556,9 +556,8 @@ pub fn inline(
                         && local == &object_local
                     {
                         let right = &field_assign.right[0];
-                        if right.as_closure().is_none()
-                            && right.values_read().contains(&&object_local)
-                        {
+                        // Only break if the value is a closure AND it references the table variable
+                        if right.as_closure().is_some() && right.values_read().contains(&&object_local) {
                             break;
                         }
 
