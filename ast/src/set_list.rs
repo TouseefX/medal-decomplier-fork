@@ -75,20 +75,37 @@ impl Traverse for SetList {
 
 impl std::fmt::Display for SetList {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(
-            f,
-            "local tablething = __set_list({}, {}, {{{}}}) -- set the table your self",
-            self.object_local,
-            self.index,
-            // TODO: bad
-            formatter::format_arg_list(
-                &self
-                    .values
-                    .iter()
-                    .chain(self.tail.as_ref())
-                    .cloned()
-                    .collect::<Vec<_>>()
+        let all_tables = self.tail.is_none() && self.values.iter().all(|v| matches!(v, crate::RValue::Table(_)));
+        let has_non_table = self.values.iter().any(|v| !matches!(v, crate::RValue::Table(_)));
+        if all_tables {
+            write!(f, "local {} = {{", self.object_local)?;
+            for (i, value) in self.values.iter().enumerate() {
+                if i != 0 {
+                    write!(f, ", ")?;
+                }
+                write!(f, "{}", value)?;
+            }
+            write!(f, "}}")
+        } else {
+            write!(
+                f,
+                "local {} = __set_list({}, {})",
+                self.object_local,
+                self.index,
+                formatter::format_arg_list(
+                    &self
+                        .values
+                        .iter()
+                        .chain(self.tail.as_ref())
+                        .cloned()
+                        .collect::<Vec<_>>()
+                )
+            )?;
+            write!(
+                f,
+                "{}",
+                if has_non_table { " -- WARNING: non-table value in set_list!" } else { " -- set the table your self" }
             )
-        )
+        }
     }
 }
