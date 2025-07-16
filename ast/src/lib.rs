@@ -41,6 +41,7 @@ pub mod type_system;
 mod unary;
 mod vararg;
 mod r#while;
+pub mod combine_nested_ifs;
 
 pub use assign::*;
 pub use binary::*;
@@ -282,6 +283,13 @@ pub enum Statement {
     Close(Close),
     SetList(SetList),
     Comment(Comment),
+}
+
+impl Statement {
+    /// Returns true if this statement is a terminating control flow statement.
+    pub fn is_terminating(&self) -> bool {
+        matches!(self, Statement::Return(_) | Statement::Break(_) | Statement::Continue(_))
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]

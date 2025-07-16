@@ -549,32 +549,51 @@ impl<'a, W: fmt::Write> Formatter<'a, W> {
     }
 
     pub(crate) fn format_if(&mut self, r#if: &If) -> fmt::Result {
-        write!(self.output, "if ")?;
-
-        self.format_rvalue(&r#if.condition)?;
-
-        writeln!(self.output, " then")?;
-
-        let then_block = r#if.then_block.lock();
-        if !then_block.is_empty() {
-            self.format_block(&then_block)?;
-            writeln!(self.output)?;
-        }
-
-        let else_block = r#if.else_block.lock();
-        if !else_block.is_empty() {
-            self.indent()?;
-            if let Some(else_if) = else_block.iter().exactly_one().ok().and_then(|s| s.as_if()) {
-                write!(self.output, "else")?;
-                return self.format_if(else_if);
+        let mut current_if = r#if.clone();
+        let mut first = true;
+        loop {
+            if first {
+                write!(self.output, "if ")?;
+                first = false;
+            } else {
+                self.indent()?;
+                write!(self.output, "elseif ")?;
             }
-            writeln!(self.output, "else")?;
-            self.format_block(&else_block)?;
-            writeln!(self.output)?;
+            self.format_rvalue(&current_if.condition)?;
+            writeln!(self.output, " then")?;
+            {
+                let then_block = current_if.then_block.lock();
+                if !then_block.is_empty() {
+                    self.format_block(&then_block)?;
+                    writeln!(self.output)?;
+                }
+            } // then_block lock dropped here
+            // Extract info before dropping the lock
+            let (is_else_if, next_if, else_block_nonempty) = {
+                let else_block = current_if.else_block.lock();
+                let next_if = if else_block.len() == 1 {
+                    else_block[0].as_if().cloned()
+                } else {
+                    None
+                };
+                (next_if.is_some(), next_if, !else_block.is_empty())
+            };
+            if is_else_if {
+                current_if = next_if.unwrap();
+                continue;
+            }
+            if else_block_nonempty {
+                self.indent()?;
+                writeln!(self.output, "else")?;
+                let else_block = current_if.else_block.lock();
+                self.format_block(&else_block)?;
+                writeln!(self.output)?;
+            }
+            self.indent()?;
+            write!(self.output, "end")?;
+            break;
         }
-
-        self.indent()?;
-        write!(self.output, "end")
+        Ok(())
     }
 
     pub(crate) fn format_assign(&mut self, assign: &Assign) -> fmt::Result {

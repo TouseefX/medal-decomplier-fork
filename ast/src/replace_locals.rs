@@ -47,3 +47,31 @@ pub fn replace_locals<H: std::hash::BuildHasher>(
         }
     }
 }
+
+/// Panics if any goto or label is found in the AST block (for enforcing structured output).
+pub fn fail_on_goto(block: &crate::Block) {
+    for stmt in &block.0 {
+        match stmt {
+            crate::Statement::Goto(_) | crate::Statement::Label(_) => {
+                panic!("Unstructured control flow (goto/label) found in output! Please improve structuring.");
+            }
+            crate::Statement::If(r#if) => {
+                fail_on_goto(&r#if.then_block.lock());
+                fail_on_goto(&r#if.else_block.lock());
+            }
+            crate::Statement::While(r#while) => {
+                fail_on_goto(&r#while.block.lock());
+            }
+            crate::Statement::Repeat(repeat) => {
+                fail_on_goto(&repeat.block.lock());
+            }
+            crate::Statement::NumericFor(numeric_for) => {
+                fail_on_goto(&numeric_for.block.lock());
+            }
+            crate::Statement::GenericFor(generic_for) => {
+                fail_on_goto(&generic_for.block.lock());
+            }
+            _ => {}
+        }
+    }
+}

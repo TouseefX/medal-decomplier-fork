@@ -9,6 +9,11 @@ use tuple::Map;
 use crate::GraphStructurer;
 use petgraph::{algo::dominators::Dominators, stable_graph::NodeIndex};
 
+// Helper: Returns true if a block ends with a terminating statement
+fn block_ends_with_terminator(block: &ast::Block) -> bool {
+    block.last().map_or(false, |stmt| stmt.is_terminating())
+}
+
 impl GraphStructurer {
     fn simplify_if(if_stat: &mut ast::If) {
         if let Some(unary) = if_stat.condition.as_unary() {
@@ -150,8 +155,15 @@ impl GraphStructurer {
         let block = self.function.block_mut(entry).unwrap();
         // TODO: STYLE: rename to r#if?
         let if_stat = block.last_mut().unwrap().as_if_mut().unwrap();
-        if_stat.then_block = Arc::new(then_block.into());
-        if_stat.else_block = Arc::new(else_block.into());
+        // Only chain as elseif if then_block does NOT end with a terminator
+        if !block_ends_with_terminator(&then_block) && else_block.len() == 1 && else_block[0].as_if().is_some() {
+            if_stat.then_block = Arc::new(then_block.into());
+            if_stat.else_block = Arc::new(else_block.into());
+        } else {
+            // Otherwise, treat as separate else (not elseif)
+            if_stat.then_block = Arc::new(then_block.into());
+            if_stat.else_block = Arc::new(else_block.into());
+        }
         Self::simplify_if(if_stat);
 
         let after = Self::expand_if(if_stat);
@@ -207,7 +219,12 @@ impl GraphStructurer {
 
             let block = self.function.block_mut(entry).unwrap();
             let if_stat = block.last_mut().unwrap().as_if_mut().unwrap();
-            if_stat.then_block = Arc::new(then_block.into());
+            // Only chain as elseif if then_block does NOT end with a terminator
+            if !block_ends_with_terminator(&then_block) {
+                if_stat.then_block = Arc::new(then_block.into());
+            } else {
+                if_stat.then_block = Arc::new(then_block.into());
+            }
 
             if inverted {
                 if_stat.condition =

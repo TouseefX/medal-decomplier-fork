@@ -39,6 +39,7 @@ use std::{
 };
 
 use deserializer::bytecode::Bytecode;
+use ast::replace_locals::fail_on_goto;
 
 #[cfg(feature = "dhat-heap")]
 #[global_allocator]
@@ -136,6 +137,7 @@ pub fn decompile_bytecode(bytecode: &[u8], encode_key: u8) -> String {
             let main = ByAddress(main);
             upvalues.remove(&main);
             let mut body = Arc::try_unwrap(main.0).unwrap().into_inner().body;
+            fail_on_goto(&body);
             link_upvalues(&mut body, &mut upvalues);
             name_locals(&mut body, true);
             body.to_string()

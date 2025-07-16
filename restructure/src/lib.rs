@@ -15,6 +15,11 @@ mod conditional;
 mod jump;
 mod r#loop;
 
+use ast::combine_nested_ifs;
+// use ast::inline_simple_locals;
+
+// REMOVE: use ast::combine_nested_ifs;
+
 // TODO: REFACTOR: move
 pub fn post_dominators<N: Default, E: Default>(
     graph: &mut StableDiGraph<N, E>,
@@ -166,17 +171,17 @@ impl GraphStructurer {
 
     fn insert_goto_for_edge(&mut self, edge: EdgeIndex) {
         let (source, target) = self.function.graph().edge_endpoints(edge).unwrap();
-        if self.function.graph().edge_weight(edge).unwrap().branch_type == BranchType::Unconditional
-            && self.function.predecessor_blocks(target).count() == 1
-        {
+        let branch_type = self.function.graph().edge_weight(edge).unwrap().branch_type.clone();
+        let target_predecessors = self.function.predecessor_blocks(target).count();
+        if branch_type == BranchType::Unconditional && target_predecessors == 1 {
+            // Inline the target block's statements at the source
             assert!(self.function.successor_blocks(source).count() == 1);
-            // TODO: this code is repeated in match_jump, move to a new function
             let edges = self.function.remove_edges(target);
             let block = self.function.remove_block(target).unwrap();
             self.function.block_mut(source).unwrap().extend(block.0);
             self.function.set_edges(source, edges);
         } else {
-            // TODO: make label an Rc and have a global counter for block name
+            // Fallback: multiple predecessors, keep goto
             let label = ast::Label(format!("l{}", target.index()));
             let target_block = self.function.block_mut(target).unwrap();
             if target_block.first().and_then(|s| s.as_label()).is_none() {
@@ -311,26 +316,34 @@ impl GraphStructurer {
                 let mut goto_destinations = FxHashSet::default();
                 collect_gotos(&block, &mut goto_destinations);
                 for label in goto_destinations {
-                    // TODO: block might have been merged/structured into another, output that block instead
-                    // will require collecting label definitions in addition to references (gotos)
                     let target_node = self.label_to_node[&label];
                     if self.function.has_block(target_node) {
                         stack.push(target_node);
                     }
                 }
+                // Remove a goto to this node if it is the last statement in res_block
                 if let Some(ast::Statement::Goto(goto)) = res_block.last()
-                // TODO: keep label -> block map instead
                     && goto.0.0[1..] == node.index().to_string()
                 {
                     res_block.pop();
                 }
+                // Only push a comment if the block doesn't start with a label
                 if !block
                     .first()
                     .is_some_and(|s| matches!(s, ast::Statement::Label(_)))
                 {
                     res_block.push(ast::Comment::new(format!("block {}", node.index())).into());
                 }
-                res_block.extend(block.0)
+                // Emit statements up to and including the first goto, then stop
+                let mut found_goto = false;
+                for stmt in block.0 {
+                    res_block.push(stmt.clone());
+                    if matches!(stmt, ast::Statement::Goto(_)) {
+                        found_goto = true;
+                        break;
+                    }
+                }
+                // If a goto was found, do not emit the rest of the block (prevents code after goto)
             }
             // TODO: these nodes are never executed (i think), comment them out or dont include them
             for node in self.function.graph().node_indices().collect::<Vec<_>>() {
@@ -341,7 +354,15 @@ impl GraphStructurer {
                 {
                     res_block.push(ast::Comment::new(format!("block {}", node.index())).into());
                 }
-                res_block.extend(block.0)
+                // Emit statements up to and including the first goto, then stop
+                let mut found_goto = false;
+                for stmt in block.0 {
+                    res_block.push(stmt.clone());
+                    if matches!(stmt, ast::Statement::Goto(_)) {
+                        found_goto = true;
+                        break;
+                    }
+                }
             }
 
             res_block
@@ -356,5 +377,7 @@ impl GraphStructurer {
 }
 
 pub fn lift(function: cfg::function::Function) -> ast::Block {
-    GraphStructurer::new(function).structure()
+    let mut block = GraphStructurer::new(function).structure();
+    combine_nested_ifs::combine_nested_ifs(&mut block);
+    block
 }

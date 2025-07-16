@@ -268,6 +268,11 @@ fn match_conditional_sequence(
     }
 }
 
+// Helper: Returns true if a block ends with a terminating statement
+fn block_ends_with_terminator(block: &ast::Block) -> bool {
+    block.last().map_or(false, |stmt| stmt.is_terminating())
+}
+
 pub fn structure_conditionals(function: &mut Function) -> bool {
     let mut did_structure = false;
     // TODO: does this need to be in dfs post order?
@@ -284,58 +289,64 @@ pub fn structure_conditionals(function: &mut Function) -> bool {
             // TODO: can we continue?
             && &Some(pattern.second_node) != function.entry()
         {
-            let second_to_sc_edges = function
-                .edges(pattern.second_node)
-                .filter(|e| e.target() == pattern.short_circuit)
-                .collect::<Vec<_>>();
-            assert!(second_to_sc_edges.len() == 1);
-            let second_to_sc_args = second_to_sc_edges[0].weight().arguments.clone();
-            let first_to_sc_edges = function
-                .edges(pattern.first_node)
-                .filter(|e| e.target() == pattern.short_circuit)
-                .collect::<Vec<_>>();
-            assert!(first_to_sc_edges.len() == 1);
-            let first_to_sc_edge = first_to_sc_edges[0].id();
-            for arg in &mut function
-                .graph_mut()
-                .edge_weight_mut(first_to_sc_edge)
-                .unwrap()
-                .arguments
-            {
-                if let Some(new_arg) = second_to_sc_args.iter().find(|(k, _)| k == &arg.0) {
-                    *arg = new_arg.clone();
+            // Only allow chaining as elseif if the then_block does NOT end with a terminator
+            let first_block = function.block(pattern.first_node).unwrap();
+            let can_chain_elseif = !block_ends_with_terminator(first_block);
+            if can_chain_elseif {
+                let second_to_sc_edges = function
+                    .edges(pattern.second_node)
+                    .filter(|e| e.target() == pattern.short_circuit)
+                    .collect::<Vec<_>>();
+                assert!(second_to_sc_edges.len() == 1);
+                let second_to_sc_args = second_to_sc_edges[0].weight().arguments.clone();
+                let first_to_sc_edges = function
+                    .edges(pattern.first_node)
+                    .filter(|e| e.target() == pattern.short_circuit)
+                    .collect::<Vec<_>>();
+                assert!(first_to_sc_edges.len() == 1);
+                let first_to_sc_edge = first_to_sc_edges[0].id();
+                for arg in &mut function
+                    .graph_mut()
+                    .edge_weight_mut(first_to_sc_edge)
+                    .unwrap()
+                    .arguments
+                {
+                    if let Some(new_arg) = second_to_sc_args.iter().find(|(k, _)| k == &arg.0) {
+                        *arg = new_arg.clone();
+                    }
                 }
-            }
 
-            let second_terminator = function.conditional_edges(pattern.second_node).unwrap();
-            let other_edge = if second_terminator.0.target() == pattern.short_circuit {
-                second_terminator.1
-            } else {
-                second_terminator.0
-            };
-            let other_edge = other_edge.id();
-            assert!(skip_over_node(function, pattern.first_node, other_edge));
+                let second_terminator = function.conditional_edges(pattern.second_node).unwrap();
+                let other_edge = if second_terminator.0.target() == pattern.short_circuit {
+                    second_terminator.1
+                } else {
+                    second_terminator.0
+                };
+                let other_edge = other_edge.id();
+                assert!(skip_over_node(function, pattern.first_node, other_edge));
 
-            let mut removed_block = function.remove_block(pattern.second_node).unwrap();
-            let first_node = pattern.first_node;
-            if pattern.assign {
-                let assign = removed_block.first_mut().unwrap().as_assign_mut().unwrap();
-                assign.right = vec![pattern.final_condition.reduce()];
-            } else {
-                let removed_if = removed_block.last_mut().unwrap().as_if_mut().unwrap();
-                removed_if.condition = pattern.final_condition.reduce_condition();
+                let mut removed_block = function.remove_block(pattern.second_node).unwrap();
+                let first_node = pattern.first_node;
+                if pattern.assign {
+                    let assign = removed_block.first_mut().unwrap().as_assign_mut().unwrap();
+                    assign.right = vec![pattern.final_condition.reduce()];
+                } else {
+                    let removed_if = removed_block.last_mut().unwrap().as_if_mut().unwrap();
+                    removed_if.condition = pattern.final_condition.reduce_condition();
+                }
+                if pattern.inverted {
+                    let removed_if = removed_block.last_mut().unwrap().as_if_mut().unwrap();
+                    // TODO: unnecessary clone?
+                    removed_if.condition =
+                        ast::Unary::new(removed_if.condition.clone(), UnaryOperation::Not)
+                            .reduce_condition();
+                }
+                let first_block = function.block_mut(first_node).unwrap();
+                first_block.pop();
+                first_block.extend(removed_block.0);
+                did_structure = true;
             }
-            if pattern.inverted {
-                let removed_if = removed_block.last_mut().unwrap().as_if_mut().unwrap();
-                // TODO: unnecessary clone?
-                removed_if.condition =
-                    ast::Unary::new(removed_if.condition.clone(), UnaryOperation::Not)
-                        .reduce_condition();
-            }
-            let first_block = function.block_mut(first_node).unwrap();
-            first_block.pop();
-            first_block.extend(removed_block.0);
-            did_structure = true;
+            // If cannot chain as elseif, do not merge the blocks (leave as separate if/else)
         }
 
         did_structure |= try_remove_unnecessary_condition(function, node);
