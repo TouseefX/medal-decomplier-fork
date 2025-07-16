@@ -1,3 +1,5 @@
+-- LICENSE NOT OWNED BY ME!
+
 MIT License
 
 Copyright (c) 2024 Jujhar Singh, Mathias Pedersen
