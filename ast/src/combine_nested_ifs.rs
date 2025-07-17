@@ -38,28 +38,9 @@ pub fn combine_nested_ifs(block: &mut Block) {
                                 .flat_map(|stmt| stmt.values_read())
                                 .any(|l| l == local);
                             if cond_is_local && !used_after {
-                                // Combine the outer condition (if any) and the assignment expr
-                                let mut outer_condition = None;
-                                if i > 0 {
-                                    if let Statement::If(outer_if) = &block[i - 1] {
-                                        outer_condition = Some(outer_if.condition.clone());
-                                    }
-                                }
-                                let new_condition = if let Some(outer) = outer_condition {
-                                    RValue::Binary(crate::binary::Binary::new(
-                                        outer,
-                                        assign.right[0].clone(),
-                                        crate::binary::BinaryOperation::And,
-                                    ))
-                                } else {
-                                    RValue::Binary(crate::binary::Binary::new(
-                                        assign.right[0].clone(),
-                                        inner_if.condition.clone(),
-                                        crate::binary::BinaryOperation::And,
-                                    ))
-                                };
+                                // Instead of using the local variable in the condition, use the assigned expression directly
                                 let mut new_if = inner_if.clone();
-                                new_if.condition = new_condition;
+                                new_if.condition = assign.right[0].clone();
                                 if used_in_then {
                                     // Move the assignment inside the then-block
                                     let mut then_block = new_if.then_block.lock();
