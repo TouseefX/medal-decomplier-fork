@@ -122,6 +122,6 @@ impl fmt::Display for Table {
             indentation_mode: Default::default(),
             output: f,
         }
-        .format_table(self)
+        .format_table(self, None)
     }
 }
