@@ -198,7 +198,7 @@ impl<'a, W: fmt::Write> Formatter<'a, W> {
         table.0.iter().any(|(_, v)| matches!(v, RValue::Table(_x)))
     }
 
-    pub(crate) fn format_table(&mut self, table: &Table) -> fmt::Result {
+    pub(crate) fn format_table(&mut self, table: &Table, skip_keys: Option<&[&str]>) -> fmt::Result {
         let sequential_keys = Self::are_table_keys_sequential(table);
         let should_space = !table.0.is_empty();
         let should_format = !table.0.is_empty() && (!sequential_keys || table.0.len() > 3)
@@ -210,7 +210,24 @@ impl<'a, W: fmt::Write> Formatter<'a, W> {
             write!(self.output, " ")?;
         }
         self.indentation_level += 1;
+        let mut first = true;
         for (index, (key, value)) in table.0.iter().enumerate() {
+            // Skip keys if requested
+            if let Some(skip) = skip_keys {
+                if let Some(key) = key {
+                    if let RValue::Literal(Literal::String(bytes)) = key {
+                        let key_str = std::str::from_utf8(bytes).unwrap();
+                        if skip.contains(&key_str) {
+                            continue;
+                        }
+                    }
+                }
+            }
+            if !first {
+                write!(self.output, ",")?;
+                write!(self.output, "{}", if should_format { "\n" } else { " " })?;
+            }
+            first = false;
             if should_format {
                 self.indent()?;
             }
@@ -249,10 +266,6 @@ impl<'a, W: fmt::Write> Formatter<'a, W> {
                     }
                 }
                 self.format_rvalue(value)?;
-                if !is_last {
-                    write!(self.output, ",")?;
-                    write!(self.output, "{}", if should_format { "\n" } else { " " })?;
-                }
             }
         }
         self.indentation_level -= 1;
@@ -377,7 +390,7 @@ impl<'a, W: fmt::Write> Formatter<'a, W> {
             RValue::Select(Select::MethodCall(method_call)) | RValue::MethodCall(method_call) => {
                 self.format_method_call(method_call)
             }
-            RValue::Table(table) => self.format_table(table),
+            RValue::Table(table) => self.format_table(table, None),
             RValue::Index(index) => self.format_index(index),
             RValue::Unary(unary) => self.format_unary(unary),
             RValue::Binary(binary) => self.format_binary(binary),
@@ -599,6 +612,56 @@ impl<'a, W: fmt::Write> Formatter<'a, W> {
     pub(crate) fn format_assign(&mut self, assign: &Assign) -> fmt::Result {
         if assign.prefix {
             write!(self.output, "local ")?;
+        }
+
+        // Generalized: Move any field whose value is a reference to the variable being assigned outside the table assignment
+        if assign.left.len() == 1
+            && assign.right.len() == 1
+            && let RValue::Table(table) = &assign.right[0]
+        {
+            let var_lvalue = &assign.left[0];
+            // Collect keys to move outside
+            let mut moved_fields: Vec<(&str, &RValue)> = Vec::new();
+            let mut skip_keys: Vec<&str> = Vec::new();
+            for (key, value) in &table.0 {
+                if let Some(key) = key {
+                    if let RValue::Literal(Literal::String(bytes)) = key {
+                        let key_str = std::str::from_utf8(bytes).unwrap();
+                        // If value is a reference to the variable being assigned
+                        if let RValue::Local(local) = value {
+                            if let LValue::Local(var_local) = var_lvalue {
+                                if local == var_local {
+                                    moved_fields.push((key_str, value));
+                                    skip_keys.push(key_str);
+                                    continue;
+                                }
+                            }
+                        }
+                        if let RValue::Global(global) = value {
+                            if let LValue::Global(var_global) = var_lvalue {
+                                if global == var_global {
+                                    moved_fields.push((key_str, value));
+                                    skip_keys.push(key_str);
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if !moved_fields.is_empty() {
+                self.format_lvalue(var_lvalue)?;
+                write!(self.output, " = ")?;
+                self.format_table(table, Some(&skip_keys))?;
+                writeln!(self.output)?;
+                for (key_str, value) in moved_fields {
+                    self.format_lvalue(var_lvalue)?;
+                    write!(self.output, ".{} = ", key_str)?;
+                    self.format_rvalue(value)?;
+                    writeln!(self.output)?;
+                }
+                return Ok(());
+            }
         }
 
         if assign.left.len() == 1
