@@ -18,3 +18,7 @@ Since Medal Has Been Left i will try to make a better one using AI (i don't know
 ```bash
 cargo +nightly build --release
 ```
+
+### Shutdowned
+## Reason:
+# My Computer Is Dead
